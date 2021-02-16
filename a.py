@@ -4,6 +4,7 @@ import sys
 import re
 
 def matches(pat, x):
+    print("RE", pat)
     return re.search(pat, x)
 
 def assemble(strs, subs, var):
@@ -61,18 +62,20 @@ def main():
                 break
 
 
-def parse(x, start, lvl):
+def parse(x, i, lvl):
     escape = False
     tree = []
-    i = start
 
     buf = []
     while i < len(x):
-        if escape:
+        if escape and i == len(x) - 1:
+            buf.append("\\")
+            escape = False
+        elif escape:
             if x[i] in "{}":
                 buf.append(x[i])
             elif x[i] == "\\":
-                buf.append("\\\\")
+                buf.append("\\")
             else:
                 buf.append("\\")
                 buf.append(x[i])
@@ -87,14 +90,11 @@ def parse(x, start, lvl):
 
 
         if x[i] == "{":
-            #tree.append(x[start:i])
             tree.append("".join(buf))
             i, subtree = parse(x, i + 1, lvl + 1)
             tree.append(subtree)
-            #start = i + 1
             buf = []
         elif x[i] == "}":
-            #tree.append(x[start:i])
             tree.append("".join(buf))
             if lvl == 0 and i < len(x) - 1:
                 raise ValueError("Parse error: closing }")
@@ -121,7 +121,7 @@ def tree_to_regex(tree, is_group):
                 rx = "[0-9]+"
             elif group[0].isalpha():
                 rx = "[a-zA-Z0-9]+"
-                #rx = "[^/]+"
+                rx = "[^/]+"
             else:
                 raise ValueError("Group name must be alphanumeric only")
             group, rx = tree[0], rx
