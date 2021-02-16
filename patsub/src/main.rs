@@ -1,5 +1,6 @@
 use std::env;
 use std::io::{self,BufRead,Write};
+use std::collections::HashMap;
 
 extern crate regex;
 use regex::Regex;
@@ -40,8 +41,22 @@ fn parse(s: &Vec<char>, mut i: usize, lvl: usize) -> (usize, Parsed) {
 fn to_regex_(tree: &[Parsed], is_group: bool, result: &mut Vec<String>) {
     if is_group {
         let name = match tree[0] {Parsed::Str(ref s) => s, _ => {panic!("unreachable")} };
-        let rx = "[^/]*";
-        result.push(format!("(?P<{}>{}", name, rx));
+        //let mut rx;
+        //if first.len() == 0 {
+        //    rx = r"[^/]*"
+        //}
+        // TODO handle split by ":"
+
+        let rx = if name.chars().all(|c| c.is_ascii_lowercase()) {
+            r"[^/]*"
+        } else if name.chars().all(|c| c.is_ascii_alphabetic()) {
+            r"\w*"
+        } else if name.chars().all(|c| c.is_ascii_digit()) {
+            r"\d*"
+        } else {
+            r"[^/]*"
+        };
+        result.push(format!("(?P<P{}>{}", name, rx));
 
         to_regex_(&tree[1..], false, result);
         result.push(String::from(")"));
@@ -59,44 +74,29 @@ fn to_regex(tree: &Parsed) -> String {
     let mut result: Vec<String> = Vec::new();
     if let &Parsed::Tree(ref tree1) = tree {
         if let Parsed::Tree(ref tree2) = tree1[1] {
-            println!("yyy {:?}", tree2);
             to_regex_(tree2, false, &mut result);
         }
     }
     result.join("")
 }
 
-fn assemble(s: &[String]) -> String {
+fn assemble(s: &[&str], dict: &HashMap<&str, &str>) -> String {
     let mut res: Vec<char> = s[0].chars().collect();
     for i in (1..s.len()).step_by(2) {
-        res.push('<');
-        res.extend(s[i].chars());
-        res.push('>');
+        let key = format!("P{}", s[i]);
+        if let Some(m) = dict.get(key.as_str()) {
+            res.extend(m.chars());
+        }
         res.extend(s[i + 1].chars());
     }
     res.iter().collect()
 }
 
-fn parse_sub(s: &str) -> Vec<String> {
-    let mut res = Vec::new();
-    for part in s.split(&['{', '}'][..]) {
-        res.push(String::from(part));
-    }
-    res
-}
-
 fn main() {
-    let args: Vec<String> = env::args().collect();
-    println!("argz {:?}", args);
-
-//    let pat = format!("{{{}}}", &args[1]);
-//    let (_, tree) = parse(&pat.chars().collect(), 0, 0);
-//    let rx = to_regex(&tree);
-//    println!("rx {}", rx);
-
     let mut pats_: Vec<&str> = Vec::new();
     let mut subs_: Vec<&str> = Vec::new();
 
+    let args: Vec<String> = env::args().collect();
     for i in (1..args.len()).step_by(2) {
         pats_.push(args[i].as_ref());
         if i + 1 == args.len() {
@@ -105,27 +105,33 @@ fn main() {
             subs_.push(args[i + 1].as_ref());
         }
     }
-    println!("{:?}", pats_);
-    println!("{:?}", subs_);
 
     let pats: Vec<Regex> = pats_.iter().map(|arg| {
         let pat = format!("{{{}}}", arg);
         let (_, tree) = parse(&pat.chars().collect(), 0, 0);
-        let rx = to_regex(&tree);
-        //println!("rx {}", rx);
-
+        let rx = format!("({})", to_regex(&tree));
         Regex::new(&rx).unwrap()
     }).collect();
 
-    let subs: Vec<Vec<String>> = subs_.iter().map(|x| parse_sub(x)).collect();
-    println!("DEBUG {:?}", subs);
+    let subs: Vec<Vec<&str>> = subs_.iter().map(|s| s.split(&['{', '}'][..]).collect()).collect();
 
     for line in io::stdin().lock().lines() {
         let x = line.unwrap();
         for (pat, sub) in pats.iter().by_ref().zip(subs.iter()) {
-            //println!("PAT {:?}", pat);
-            if let Some(m) = pat.find(x.as_str()) {
-                let y = assemble(&sub[..]);
+            if let Some(captures) = pat.captures(x.as_str()) {
+                let main_capture = captures.iter().next().unwrap().unwrap();
+                let mut dict: HashMap<&str, &str> =
+                    pat
+                    .capture_names()
+                    .flatten()
+                    .filter_map(|name| Some((name, captures.name(name)?.as_str())))
+                    .collect();
+                dict.insert("P@", &x);
+                dict.insert("P%", &x[main_capture.start()..main_capture.end()]);
+                dict.insert("P^", &x[..main_capture.start()]);
+                dict.insert("P$", &x[main_capture.end()..]);
+
+                let y = assemble(&sub[..], &dict);
                 let _ = io::stdout().write_all(y.as_bytes());
                 let _ = io::stdout().write_all(b"\n");
                 let _ = io::stdout().flush();
