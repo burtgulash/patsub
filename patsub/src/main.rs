@@ -40,24 +40,26 @@ fn parse(s: &Vec<char>, mut i: usize, lvl: usize) -> (usize, Parsed) {
 
 fn to_regex_(tree: &[Parsed], is_group: bool, result: &mut Vec<String>) {
     if is_group {
-        let name = match tree[0] {Parsed::Str(ref s) => s, _ => {panic!("unreachable")} };
-        //let mut rx;
-        //if first.len() == 0 {
-        //    rx = r"[^/]*"
-        //}
-        // TODO handle split by ":"
+        let first = match tree[0] {Parsed::Str(ref s) => s, _ => {panic!("unreachable")} };
 
-        let rx = if name.chars().all(|c| c.is_ascii_lowercase()) {
-            r"[^/]*"
-        } else if name.chars().all(|c| c.is_ascii_alphabetic()) {
-            r"\w*"
-        } else if name.chars().all(|c| c.is_ascii_digit()) {
-            r"\d*"
+        let (group, rx) = if first.len() == 0 {
+            ("EEE", r"[^/]*")
+        } else if let Some(i) = first.find(':') {
+            (&first[..i], &first[i..])
         } else {
-            r"[^/]*"
+            let rx = if first.chars().all(|c| c.is_ascii_lowercase()) {
+                r"[^/]*"
+            } else if first.chars().all(|c| c.is_ascii_alphabetic()) {
+                r"\w*"
+            } else if first.chars().all(|c| c.is_ascii_digit()) {
+                r"\d*"
+            } else {
+                r"[^/]*"
+            };
+            (first.as_str(), rx)
         };
-        result.push(format!("(?P<P{}>{}", name, rx));
 
+        result.push(format!("(?P<P{}>{}", group, rx));
         to_regex_(&tree[1..], false, result);
         result.push(String::from(")"));
     } else {
