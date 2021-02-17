@@ -144,7 +144,14 @@ fn main() {
         println!("tree {:?}", tree);
         let rx = format!("({})", to_regex(&tree));
         println!("rx {:?}", rx);
-        Regex::new(&rx).unwrap()
+
+        match Regex::new(&rx) {
+            Result::Ok(x) => x,
+            Result::Err(e) => {
+                println!("Couldn't parse regex pattern '{}': {}", &pat[1..pat.len() - 1], e);
+                std::process::exit(1);
+            },
+        }
     }).collect();
 
     //println!("REG {:?}", pats);
@@ -152,9 +159,13 @@ fn main() {
     let subs: Vec<Vec<&str>> = subs_.iter().map(|s| s.split(&['{', '}'][..]).collect()).collect();
 
     for line in io::stdin().lock().lines() {
+        // safe to unwrap. Docs do it
         let x = line.unwrap();
+
         for (pat, sub) in pats.iter().by_ref().zip(subs.iter()) {
             if let Some(captures) = pat.captures(x.as_str()) {
+                // There is always at least one capture, because pattern was wrapped in ()
+                // unwrap is safe
                 let main_capture = captures.iter().next().unwrap().unwrap();
                 let mut dict: HashMap<&str, &str> =
                     pat
