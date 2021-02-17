@@ -1,9 +1,23 @@
 use std::env;
 use std::io::{self,BufRead,Write};
 use std::collections::HashMap;
+use std::fmt;
 
 extern crate regex;
 use regex::Regex;
+
+
+#[derive(Debug)]
+pub struct ParseError {
+    msg: &'static str
+}
+
+impl fmt::Display for ParseError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.msg)
+    }
+}
+
 
 #[derive(Debug)]
 enum Parsed {
@@ -11,7 +25,7 @@ enum Parsed {
     Tree(Vec<Parsed>),
 }
 
-fn parse(s: &Vec<char>, mut i: usize, lvl: usize) -> (usize, Parsed) {
+fn parse(s: &Vec<char>, mut i: usize, lvl: usize) -> Result<(usize, Parsed), ParseError> {
     let mut buf: Vec<char> = Vec::new();
     let mut tree: Vec<Parsed> = Vec::new();
     let mut escape = false;
@@ -48,16 +62,16 @@ fn parse(s: &Vec<char>, mut i: usize, lvl: usize) -> (usize, Parsed) {
 
         if c == '{' {
             tree.push(Parsed::Str(buf.iter().collect()));
-            let (i_, subtree) = parse(s, i + 1, lvl + 1);
+            let (i_, subtree) = parse(s, i + 1, lvl + 1)?;
             i = i_;
             tree.push(subtree);
             buf.clear();
         } else if c == '}' {
             tree.push(Parsed::Str(buf.iter().collect()));
-            if lvl == 0 && i < s.len() - 1 {
-                //raise ValueError("Parse error: closing }")
+            if lvl == 1 && i < s.len() - 1 {
+                return Err(ParseError{ msg: "Parse error: closing }" });
             }
-            return (i, Parsed::Tree(tree))
+            return Ok((i, Parsed::Tree(tree)))
         } else {
             buf.push(c);
         }
@@ -65,7 +79,11 @@ fn parse(s: &Vec<char>, mut i: usize, lvl: usize) -> (usize, Parsed) {
         i += 1;
     }
 
-    (i, Parsed::Tree(tree))
+    if lvl > 1 {
+        return Err(ParseError{ msg: "Parse error: unclosed {" });
+    }
+
+    Ok((i, Parsed::Tree(tree)))
 }
 
 fn to_regex_(tree: &[Parsed], is_group: bool, result: &mut Vec<String>) {
@@ -138,23 +156,28 @@ fn main() {
         }
     }
 
-    let pats: Vec<Regex> = pats_.iter().map(|arg| {
-        let pat = format!("{{{}}}", arg);
-        let (_, tree) = parse(&pat.chars().collect(), 0, 0);
-        println!("tree {:?}", tree);
-        let rx = format!("({})", to_regex(&tree));
-        println!("rx {:?}", rx);
-
-        match Regex::new(&rx) {
-            Result::Ok(x) => x,
-            Result::Err(e) => {
-                println!("Couldn't parse regex pattern '{}': {}", &pat[1..pat.len() - 1], e);
+    let pats: Vec<Regex> = pats_.iter().map(|pat_| {
+        let pat = format!("{{{}}}", pat_);
+        match parse(&pat.chars().collect(), 0, 0) {
+            Err(e) => {
+                println!("Couldn't parse regex pattern '{}': {}", pat_, e);
                 std::process::exit(1);
             },
+            Ok((_, tree)) => {
+                println!("tree {:?}", tree);
+                let rx = format!("({})", to_regex(&tree));
+                println!("rx {:?}", rx);
+
+                match Regex::new(&rx) {
+                    Result::Ok(x) => x,
+                    Result::Err(e) => {
+                        println!("Couldn't parse regex pattern '{}': {}", pat_, e);
+                        std::process::exit(1);
+                    },
+                }
+            }
         }
     }).collect();
-
-    //println!("REG {:?}", pats);
 
     let subs: Vec<Vec<&str>> = subs_.iter().map(|s| s.split(&['{', '}'][..]).collect()).collect();
 
@@ -164,15 +187,18 @@ fn main() {
 
         for (pat, sub) in pats.iter().by_ref().zip(subs.iter()) {
             if let Some(captures) = pat.captures(x.as_str()) {
+
                 // There is always at least one capture, because pattern was wrapped in ()
                 // unwrap is safe
                 let main_capture = captures.iter().next().unwrap().unwrap();
+
                 let mut dict: HashMap<&str, &str> =
                     pat
                     .capture_names()
                     .flatten()
                     .filter_map(|name| Some((name, captures.name(name)?.as_str())))
                     .collect();
+
                 dict.insert("P@", &x);
                 dict.insert("P%", &x[main_capture.start()..main_capture.end()]);
                 dict.insert("P^", &x[..main_capture.start()]);
