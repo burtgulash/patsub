@@ -14,22 +14,52 @@ enum Parsed {
 fn parse(s: &Vec<char>, mut i: usize, lvl: usize) -> (usize, Parsed) {
     let mut buf: Vec<char> = Vec::new();
     let mut tree: Vec<Parsed> = Vec::new();
+    let mut escape = false;
 
     while i < s.len() {
-        if s[i] == '{' {
+        let c = s[i];
+
+        if escape {
+            if i == s.len() - 1 {
+                buf.push('\\');
+                escape = false;
+            } else {
+                if "{}".contains(c) {
+                    buf.push(c);
+                } else if c == '\\' {
+                    // Rust regex eats one '\'. Supply two to compensate
+                    buf.push(c);
+                    buf.push(c);
+                } else {
+                    buf.push('\\');
+                    buf.push(c);
+                }
+                i += 1;
+                escape = false;
+                continue
+            }
+        }
+
+        if c == '\\' {
+            i += 1;
+            escape = true;
+            continue
+        }
+
+        if c == '{' {
             tree.push(Parsed::Str(buf.iter().collect()));
             let (i_, subtree) = parse(s, i + 1, lvl + 1);
             i = i_;
             tree.push(subtree);
             buf.clear();
-        } else if s[i] == '}' {
+        } else if c == '}' {
             tree.push(Parsed::Str(buf.iter().collect()));
             if lvl == 0 && i < s.len() - 1 {
                 //raise ValueError("Parse error: closing }")
             }
             return (i, Parsed::Tree(tree))
         } else {
-            buf.push(s[i]);
+            buf.push(c);
         }
 
         i += 1;
@@ -45,7 +75,7 @@ fn to_regex_(tree: &[Parsed], is_group: bool, result: &mut Vec<String>) {
         let (group, rx) = if first.len() == 0 {
             ("EEE", r"[^/]*")
         } else if let Some(i) = first.find(':') {
-            (&first[..i], &first[i..])
+            (&first[..i], &first[i + 1..])
         } else {
             let rx = if first.chars().all(|c| c.is_ascii_lowercase()) {
                 r"[^/]*"
@@ -111,9 +141,13 @@ fn main() {
     let pats: Vec<Regex> = pats_.iter().map(|arg| {
         let pat = format!("{{{}}}", arg);
         let (_, tree) = parse(&pat.chars().collect(), 0, 0);
+        println!("tree {:?}", tree);
         let rx = format!("({})", to_regex(&tree));
+        println!("rx {:?}", rx);
         Regex::new(&rx).unwrap()
     }).collect();
+
+    //println!("REG {:?}", pats);
 
     let subs: Vec<Vec<&str>> = subs_.iter().map(|s| s.split(&['{', '}'][..]).collect()).collect();
 
