@@ -1,10 +1,12 @@
-use std::env;
 use std::io::{self,BufRead,Write};
 use std::collections::HashMap;
 use std::fmt;
 
 extern crate regex;
 use regex::Regex;
+
+extern crate clap;
+use clap::{App,Arg};
 
 
 #[derive(Debug)]
@@ -91,7 +93,7 @@ fn to_regex_(tree: &[Parsed], is_group: bool, result: &mut Vec<String>) {
         let first = match tree[0] {Parsed::Str(ref s) => s, _ => {panic!("unreachable")} };
 
         let (group, rx) = if first.len() == 0 {
-            ("EEE", r"[^/]*")
+            ("", r"[^/]*")
         } else if let Some(i) = first.find(':') {
             (&first[..i], &first[i + 1..])
         } else {
@@ -142,17 +144,55 @@ fn assemble(s: &[&str], dict: &HashMap<&str, &str>) -> String {
     res.iter().collect()
 }
 
+const USAGE: &str =
+r"Usage: patsub [OPTIONS] [--] [PATTERN SUBSTITUTION]...
+
+OPTIONS:
+    -h           Show help.
+    -v           Show version.
+    -d           Set DELIMITER character. Default = '/'.
+    -r           Show compiled regex patterns and quit.
+    --version    Show version.
+
+PATTERN RULES:
+    {{pat:regex}}              define capture group named 'pat' matching 'regex'
+    {{pat:re{{nested:.*}}x}}   define nested group named 'nested'
+    {{a}}                      lowercase group = {{a:[^/]*}}, where '/' is DELIMITER
+    {{A}}                      uppercase group = {{a:\w*}}
+    {{1}}                      numeric group   = {{a:\d*}}
+
+SPECIAL SUBSTITUTIONS:
+    {{%}}                      matched text
+    {{@}}                      complete input text
+    {{^}}                      text before match
+    {{$}}                      text after match
+
+EXAMPLES:
+    find /tmp | patsub /tmp/{{file}} {{file}}
+    find /tmp | patsub '/tmp/{{path:.*}}/{{dir}}/{{file}}$' {{dir}}/{{file}}
+    find /tmp | patsub '{{file}}$' '{{^}} -> {{%}} from {{@}}'";
+
 fn main() {
+
+    let arg_matches = App::new("patsub").version("0.1")
+        .usage(USAGE)
+        .arg(Arg::with_name("PATSUB").multiple(true))
+        .arg(Arg::with_name("DELIMITER").short("d").value_name("DELIMITER").takes_value(true))
+        .get_matches();
+
+    let patsubs: Vec<&str> = arg_matches.values_of("PATSUB").unwrap().collect();
+    let delimiter = arg_matches.value_of("DELIMITER").unwrap_or("/");
+
+    //let patsubs: Vec<String> = env::args().collect();
     let mut pats_: Vec<&str> = Vec::new();
     let mut subs_: Vec<&str> = Vec::new();
 
-    let args: Vec<String> = env::args().collect();
-    for i in (1..args.len()).step_by(2) {
-        pats_.push(args[i].as_ref());
-        if i + 1 == args.len() {
-            subs_.push(args[i].as_ref());
+    for i in (0..patsubs.len()).step_by(2) {
+        pats_.push(patsubs[i].as_ref());
+        if i + 1 == patsubs.len() {
+            subs_.push(patsubs[i].as_ref());
         } else {
-            subs_.push(args[i + 1].as_ref());
+            subs_.push(patsubs[i + 1].as_ref());
         }
     }
 
