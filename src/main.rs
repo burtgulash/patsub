@@ -27,7 +27,7 @@ enum Parsed {
     Tree(Vec<Parsed>),
 }
 
-fn parse(s: &Vec<char>, mut i: usize, lvl: usize) -> Result<(usize, Parsed), ParseError> {
+fn parse_(s: &Vec<char>, mut i: usize, lvl: usize) -> Result<(usize, Parsed), ParseError> {
     let mut buf: Vec<char> = Vec::new();
     let mut tree: Vec<Parsed> = Vec::new();
     let mut escape = false;
@@ -64,7 +64,7 @@ fn parse(s: &Vec<char>, mut i: usize, lvl: usize) -> Result<(usize, Parsed), Par
 
         if c == '{' {
             tree.push(Parsed::Str(buf.iter().collect()));
-            let (i_, subtree) = parse(s, i + 1, lvl + 1)?;
+            let (i_, subtree) = parse_(s, i + 1, lvl + 1)?;
             i = i_;
             tree.push(subtree);
             buf.clear();
@@ -86,6 +86,18 @@ fn parse(s: &Vec<char>, mut i: usize, lvl: usize) -> Result<(usize, Parsed), Par
     }
 
     Ok((i, Parsed::Tree(tree)))
+}
+
+fn parse(s: &str) -> Result<Vec<Parsed>, ParseError> {
+    let s_ = format!("{{{}}}", s);
+    let (_, tree) = parse_(&s_.chars().collect(), 0, 0)?;
+
+    if let Parsed::Tree(mut inner1) = tree {
+        if let Parsed::Tree(inner2) = inner1.remove(1) {
+            return Ok(inner2);
+        }
+    }
+    panic!("unreachable")
 }
 
 fn to_regex_(tree: &[Parsed], is_group: bool, default: &str, result: &mut Vec<String>) {
@@ -118,15 +130,18 @@ fn to_regex_(tree: &[Parsed], is_group: bool, default: &str, result: &mut Vec<St
     }
 }
 
-fn to_regex(tree: &Parsed, default: &str) -> String {
+fn to_regex(tree: &[Parsed], default: &str) -> String {
     let mut result: Vec<String> = Vec::new();
-    if let &Parsed::Tree(ref tree1) = tree {
-        if let Parsed::Tree(ref tree2) = tree1[1] {
-            to_regex_(tree2, false, default, &mut result);
-        }
-    }
+    to_regex_(tree, false, default, &mut result);
     result.join("")
 }
+
+//fn to_subst(tree: &Parsed) -> Vec<String> {
+//    let mut result: Vec<String> = Vec::new();
+//    if let &Parsed::Tree(ref tree1) = tree {
+//
+//    }
+//}
 
 fn assemble(s: &[&str], dict: &HashMap<&str, &str>) -> String {
     let mut res: Vec<char> = s[0].chars().collect();
@@ -173,7 +188,7 @@ fn main() {
     let arg_matches = App::new("patsub").version("0.1")
         .help(USAGE)
         .arg(Arg::with_name("PATSUB").multiple(true))
-        .arg(Arg::with_name("DELIMITERS").short("d").value_name("DELIMITERS").takes_value(true))
+        .arg(Arg::with_name("DEFAULT").short("d").value_name("DEFAULT").takes_value(true))
         .arg(Arg::with_name("PRINT").short("p"))
         .get_matches();
 
@@ -198,13 +213,12 @@ fn main() {
 
     // Parse patterns
     let pats: Vec<String> = pats_.iter().map(|pat_| {
-        let pat = format!("{{{}}}", pat_);
-        match parse(&pat.chars().collect(), 0, 0) {
+        match parse(pat_) {
             Err(e) => {
                 println!("Couldn't parse regex pattern '{}': {}", pat_, e);
                 std::process::exit(1);
             },
-            Ok((_, tree)) => format!("({})", to_regex(&tree, default))
+            Ok(tree) => format!("({})", to_regex(&tree, default))
         }
     }).collect();
 
@@ -261,4 +275,12 @@ fn main() {
             }
         }
     }
+}
+
+#[test]
+fn test_parse() {
+    let pattern = r"{b:batch_{1}.txt}";
+    let compiled_regex = to_regex(&parse(pattern).unwrap(), DEFAULT);
+    let expected_regex = r"(?P<P_b>batch_(?P<P_1>\d*).txt)";
+    assert_eq!(compiled_regex, expected_regex);
 }
