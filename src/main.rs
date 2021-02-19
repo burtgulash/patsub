@@ -88,45 +88,41 @@ fn parse(s: &Vec<char>, mut i: usize, lvl: usize) -> Result<(usize, Parsed), Par
     Ok((i, Parsed::Tree(tree)))
 }
 
-fn to_regex_(tree: &[Parsed], is_group: bool, delimiters: &str, result: &mut Vec<String>) {
+fn to_regex_(tree: &[Parsed], is_group: bool, default: &str, result: &mut Vec<String>) {
     if is_group {
         let first = match tree[0] {Parsed::Str(ref s) => s, _ => {panic!("unreachable")} };
 
         let (group, rx) = if first.len() == 0 {
-            ("", format!("[^{}]*", delimiters)) // TODO escape or verify delimiters first?
+            ("", default) // TODO escape or verify default first?
         } else if let Some(i) = first.find(':') {
-            (&first[..i], String::from(&first[i + 1..]))
+            (&first[..i], &first[i + 1..])
         } else {
-            let rx = if first.chars().all(|c| c.is_ascii_lowercase()) {
-                format!("[^{}]*", delimiters)
-            } else if first.chars().all(|c| c.is_ascii_alphabetic()) {
-                String::from(r"\w*")
-            } else if first.chars().all(|c| c.is_ascii_digit()) {
-                String::from(r"\d*")
+            let rx = if first.chars().all(|c| c.is_ascii_digit()) {
+                r"\d*"
             } else {
-                String::from(r"[^/]*")
+                default
             };
             (first.as_str(), rx)
         };
 
-        result.push(format!("(?P<P_{}>{}", group, rx));
-        to_regex_(&tree[1..], false, delimiters, result);
+        result.push(format!("(?P<P_{}>{}", group, String::from(rx)));
+        to_regex_(&tree[1..], false, default, result);
         result.push(String::from(")"));
     } else {
         for x in tree {
             match x {
                 Parsed::Str(s) => result.push(s.to_string()),
-                Parsed::Tree(ref subtree) => to_regex_(subtree, true, delimiters, result),
+                Parsed::Tree(ref subtree) => to_regex_(subtree, true, default, result),
             }
         }
     }
 }
 
-fn to_regex(tree: &Parsed, delimiters: &str) -> String {
+fn to_regex(tree: &Parsed, default: &str) -> String {
     let mut result: Vec<String> = Vec::new();
     if let &Parsed::Tree(ref tree1) = tree {
         if let Parsed::Tree(ref tree2) = tree1[1] {
-            to_regex_(tree2, false, delimiters, &mut result);
+            to_regex_(tree2, false, default, &mut result);
         }
     }
     result.join("")
@@ -144,23 +140,22 @@ fn assemble(s: &[&str], dict: &HashMap<&str, &str>) -> String {
     res.iter().collect()
 }
 
-const DELIMITERS: &str = "/&";
+const DEFAULT: &str = r"[^/&?=]*";
 const USAGE: &str =
 "Usage: patsub [OPTIONS] [--] [PATTERN SUBSTITUTION]...
 
 OPTIONS:
     -h           Show help.
     -v           Show version.
-    -d           Set DELIMITERS. Default = '/&'.
+    -d           Set DEFAULT regex. Default = '\\w*'.
     -p           Show compiled regex patterns and quit.
     --version    Show version.
 
 PATTERN RULES:
     {pat:regex}              define capture group named 'pat' matching 'regex'
     {pat:re{{nested:.*}x}}   define nested group named 'nested'
-    {a}                      lowercase group = {a:[^DELIMITERS]*}
-    {A}                      uppercase group = {a:\\w*}
-    {1}                      numeric group   = {a:\\d*}
+    {}                       named group equivalent to {a:\\[^/&?=]*}
+    {1}                      numeric group matches numbers only = {1:\\d*}
 
 SPECIAL SUBSTITUTIONS:
     {%}                      matched text
@@ -186,7 +181,7 @@ fn main() {
         Some(values) => values.collect(),
         _ => Vec::new(),
     };
-    let delimiters = arg_matches.value_of("DELIMITERS").unwrap_or(DELIMITERS);
+    let default = arg_matches.value_of("DEFAULT").unwrap_or(DEFAULT);
 
     // Parse command line patsubs
     let mut pats_: Vec<&str> = Vec::new();
@@ -195,7 +190,7 @@ fn main() {
     for i in (0..patsubs.len()).step_by(2) {
         pats_.push(patsubs[i].as_ref());
         if i + 1 == patsubs.len() {
-            subs_.push(patsubs[i].as_ref());
+            subs_.push("{@}");
         } else {
             subs_.push(patsubs[i + 1].as_ref());
         }
@@ -209,7 +204,7 @@ fn main() {
                 println!("Couldn't parse regex pattern '{}': {}", pat_, e);
                 std::process::exit(1);
             },
-            Ok((_, tree)) => format!("({})", to_regex(&tree, delimiters))
+            Ok((_, tree)) => format!("({})", to_regex(&tree, default))
         }
     }).collect();
 
