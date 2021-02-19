@@ -155,6 +155,34 @@ fn assemble(s: &[&str], dict: &HashMap<&str, &str>) -> String {
     res.iter().collect()
 }
 
+fn pat_subst(res: &Vec<Regex>, subs: &[Vec<&str>], x: &str) -> Option<String> {
+    for (re, sub) in res.iter().by_ref().zip(subs.iter()) {
+        if let Some(captures) = re.captures(x) {
+            // There is always at least one capture, because pattern was wrapped in ()
+            // unwrap is safe
+            let main_capture = captures.iter().next().unwrap().unwrap();
+
+            let mut dict: HashMap<&str, &str> =
+                re
+                .capture_names()
+                .flatten()
+                .filter_map(|name| Some((name, captures.name(name)?.as_str())))
+                .collect();
+
+            dict.insert("P_@", &x);
+            dict.insert("P_%", &x[main_capture.start()..main_capture.end()]);
+            dict.insert("P_^", &x[..main_capture.start()]);
+            dict.insert("P_$", &x[main_capture.end()..]);
+
+            return Some(assemble(&sub[..], &dict))
+        }
+    }
+    None
+}
+
+
+// APP
+
 const DEFAULT: &str = r"[^/&?=]*";
 const USAGE: &str =
 "Usage: patsub [OPTIONS] [--] [PATTERN SUBSTITUTION]...
@@ -164,6 +192,7 @@ OPTIONS:
     -v           Show version.
     -d           Set DEFAULT regex. Default = '\\w*'.
     -p           Show compiled regex patterns and quit.
+    -b           buffered output.
     --version    Show version.
 
 PATTERN RULES:
@@ -190,92 +219,94 @@ fn main() {
         .arg(Arg::with_name("PATSUB").multiple(true))
         .arg(Arg::with_name("DEFAULT").short("d").value_name("DEFAULT").takes_value(true))
         .arg(Arg::with_name("PRINT").short("p"))
+        .arg(Arg::with_name("BUFFERED").short("b"))
         .get_matches();
 
-    let patsubs: Vec<&str> = match arg_matches.values_of("PATSUB") {
-        Some(values) => values.collect(),
-        _ => Vec::new(),
-    };
     let default = arg_matches.value_of("DEFAULT").unwrap_or(DEFAULT);
 
     // Parse command line patsubs
-    let mut pats_: Vec<&str> = Vec::new();
-    let mut subs_: Vec<&str> = Vec::new();
-
-    for i in (0..patsubs.len()).step_by(2) {
-        pats_.push(patsubs[i].as_ref());
-        if i + 1 == patsubs.len() {
-            subs_.push("{@}");
-        } else {
-            subs_.push(patsubs[i + 1].as_ref());
-        }
+    let mut patsubs_: Vec<&str> = match arg_matches.values_of("PATSUB") {
+        Some(values) => values.collect(),
+        _ => Vec::new(),
+    };
+    if patsubs_.len() % 2 == 1 {
+        patsubs_.push("{@}");
     }
-
-    // Parse patterns
-    let pats: Vec<String> = pats_.iter().map(|pat_| {
-        match parse(pat_) {
+    let patsubs: Vec<Vec<Parsed>> = patsubs_.iter().map(|x| {
+        match parse(x) {
+            Ok(parsed) => parsed,
             Err(e) => {
-                println!("Couldn't parse regex pattern '{}': {}", pat_, e);
+                println!("Couldn't parse'{}': {}", x, e);
                 std::process::exit(1);
             },
-            Ok(tree) => format!("({})", to_regex(&tree, default))
         }
     }).collect();
 
-    let res: Vec<Regex> = pats.iter().map(|pat| {
-        match Regex::new(&pat) {
-            Result::Ok(x) => x,
-            Result::Err(e) => {
-                println!("Couldn't parse regex pattern: {}", e);
+    let res: Vec<Regex> = patsubs.iter().step_by(2).map(|tree| {
+        match Regex::new(&to_regex(tree, default)) {
+            Ok(x) => x,
+            Err(e) => {
+                println!("Couldn't parse regex: {}", e);
                 std::process::exit(1);
             },
         }
     }).collect();
 
     // Compile substitutions
-    let subs: Vec<Vec<&str>> = subs_.iter().map(|s| s.split(&['{', '}'][..]).collect()).collect();
+    let subs: Vec<Vec<&str>> = patsubs.iter().skip(1).step_by(2).map(|tree| {
+        tree.iter().map(|x| {
+            match x {
+                Parsed::Str(s) => s.as_str(),
+                Parsed::Tree(t) => {
+                    if let Parsed::Str(s1) = &t[0] {
+                        s1.as_str()
+                    } else {
+                        panic!("unreachable")
+                    }
+                }
+            }
+        }).collect()
+    }).collect();
+
 
     // Print and exit
     if arg_matches.is_present("PRINT") {
-        for (re, sub_) in res.iter().by_ref().zip(subs_.iter()) {
+        for (re, sub_) in res.iter().by_ref().zip(subs.iter()) {
+            let mut sub: Vec<char> = Vec::new();
+            for (i, &s) in sub_.iter().enumerate() {
+                if i % 2 == 0 {
+                    sub.extend(s.chars())
+                } else {
+                    sub.push('{');
+                    sub.extend(s.chars());
+                    sub.push('}');
+                }
+            }
+            let sub_str: String = sub.iter().collect();
             let re_str = re.as_str();
-            println!("{} -> {}", &re_str[1..re_str.len()], sub_);
+            println!("{} -> {}", &re_str[1..re_str.len()], sub_str);
         }
         std::process::exit(0);
     }
 
 
+    // Main loop
     for line in io::stdin().lock().lines() {
-        // safe to unwrap. Docs do it
-        let x = line.unwrap();
-
-        for (re, sub) in res.iter().by_ref().zip(subs.iter()) {
-            if let Some(captures) = re.captures(x.as_str()) {
-
-                // There is always at least one capture, because pattern was wrapped in ()
-                // unwrap is safe
-                let main_capture = captures.iter().next().unwrap().unwrap();
-
-                let mut dict: HashMap<&str, &str> =
-                    re
-                    .capture_names()
-                    .flatten()
-                    .filter_map(|name| Some((name, captures.name(name)?.as_str())))
-                    .collect();
-
-                dict.insert("P_@", &x);
-                dict.insert("P_%", &x[main_capture.start()..main_capture.end()]);
-                dict.insert("P_^", &x[..main_capture.start()]);
-                dict.insert("P_$", &x[main_capture.end()..]);
-
-                let y = assemble(&sub[..], &dict);
+        match pat_subst(&res, &subs, &line.unwrap()) {
+            Some(y) => {
                 let _ = io::stdout().write_all(y.as_bytes());
                 let _ = io::stdout().write_all(b"\n");
-                let _ = io::stdout().flush();
-            }
+                if !arg_matches.is_present("BUFFERED") { // TODO is this really necessary (for performance)??
+                    let _ = io::stdout().flush();
+                }
+            },
+            None => {},
         }
     }
 }
+
+
+// TESTS
 
 #[test]
 fn test_parse() {
